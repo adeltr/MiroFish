@@ -43,6 +43,8 @@ class SimulationResult:
     feed: List[dict] = field(default_factory=list)
     influence: Dict[str, float] = field(default_factory=dict)
     follows: Dict[str, List[str]] = field(default_factory=dict)
+    social_backend: str = 'off'
+    oasis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -50,9 +52,36 @@ class SimulationResult:
 
 def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM] = None,
                    data_source: str = 'unknown', model: Optional[str] = None, seed: Optional[int] = None,
-                   social: bool = True) -> SimulationResult:
-    """`llm=None` : tous les LP suivent la règle de référence (aucun appel réseau)."""
+                   social='native', oasis_reactions: str = 'rule', oasis_llm_budget: int = 150,
+                   oasis_db_dir: Optional[str] = None) -> SimulationResult:
+    """`llm=None` : tous les LP suivent la règle de référence (aucun appel réseau).
+    `social` : 'native' (fil léger), 'oasis' (plateforme OASIS) ou False/'off'."""
     seed = pop.seed if seed is None else seed
+    kind = 'native' if social is True else 'off' if social in (False, None, 'off') else social
+    feed = _make_feed(kind, pop, seed, oasis_reactions, oasis_llm_budget, oasis_db_dir)
+    try:
+        return _simulate(pop, scenario, llm, data_source, model, seed, feed)
+    finally:
+        if hasattr(feed, 'close'):
+            feed.close()
+
+
+def _make_feed(kind: str, pop: Population, seed: int, reactions: str, llm_budget: int,
+               db_dir: Optional[str]):
+    if kind == 'off':
+        return None
+    graph = build_graph(pop, seed)
+    if kind == 'native':
+        return Feed(graph)
+    if kind == 'oasis':
+        from .oasis_social import OasisFeed
+        return OasisFeed(graph, agents=pop.lps, seed=seed, reactions=reactions,
+                         llm_action_budget=llm_budget, db_dir=db_dir)
+    raise ValueError("social ∈ {native, oasis, off}")
+
+
+def _simulate(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM], data_source: str,
+              model: Optional[str], seed: int, feed) -> SimulationResult:
     funds, gps = pop.funds, pop.gps
     history: Dict[str, List[float]] = prior_history(gps, seed)
     raised: Dict[str, float] = {}
@@ -63,8 +92,6 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
     themes = sorted({f.theme for f in funds.values()})
     records: List[MonthRecord] = []
     n = len(pop.lps)
-    feed = Feed(build_graph(pop, seed)) if social else None
-
     for month in scenario.months:
         i = month.index
         # 1. rendements du mois pour chaque fonds existant
@@ -116,6 +143,8 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
                 by_strategy[f.strategy] = by_strategy.get(f.strategy, 0.0) + amount
                 by_theme[f.theme] = by_theme.get(f.theme, 0.0) + amount
             rec.decisions.append(dec)
+        if hasattr(feed, 'end_of_month'):
+            feed.end_of_month(i)
         records.append(rec)
 
     return SimulationResult(
@@ -126,7 +155,9 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
         decision_sources=sources, llm_calls=llm.calls if llm is not None else 0,
         social_enabled=feed is not None, feed=feed.export() if feed else [],
         influence={k: round(v, 3) for k, v in feed.graph.influence.items()} if feed else {},
-        follows=feed.graph.follows if feed else {})
+        follows=feed.graph.follows if feed else {},
+        social_backend=('oasis' if hasattr(feed, 'oasis_export') else 'native') if feed else 'off',
+        oasis=feed.oasis_export() if hasattr(feed, 'oasis_export') else {})
 
 
 def _final_allocations(pop: Population) -> Dict[str, Dict[str, float]]:

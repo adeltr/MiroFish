@@ -19,6 +19,8 @@ SAME_ARCHETYPE_BONUS = 3.0     # on suit plus volontiers ses semblables
 FOLLOWS_PER_LP = 4
 LOOKBACK_MONTHS = 3
 FEED_EXPORT_LIMIT = 200
+ENDORSE_GAIN = 0.25          # chaque « like » de la communauté augmente de 25 % le poids d'un post
+SNIPPET_MAX_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ def build_graph(pop: Population, seed: int, follows_per_lp: int = FOLLOWS_PER_LP
 class Feed:
     graph: SocialGraph
     posts: List[Post] = field(default_factory=list)
+    endorsements: Dict[tuple, int] = field(default_factory=dict)   # (auteur, fonds, mois) -> likes
+    comments: Dict[tuple, List[str]] = field(default_factory=dict)  # (auteur, fonds, mois) -> commentaires
 
     def publish(self, post: Post) -> None:
         self.posts.append(post)
@@ -89,12 +93,17 @@ class Feed:
         visible = [p for p in self.posts
                    if p.author in followed and month_index - lookback < p.month_index <= month_index]
         for p in visible:
-            weights[p.fund_id] = weights.get(p.fund_id, 0.0) + self.graph.influence[p.author] * p.share
+            likes = self.endorsements.get((p.author, p.fund_id, p.month_index), 0)
+            weights[p.fund_id] = weights.get(p.fund_id, 0.0) + \
+                self.graph.influence[p.author] * p.share * (1.0 + ENDORSE_GAIN * likes)
             seen_peers.add(p.author)
         total = sum(weights.values())
         weights = {k: v / total for k, v in weights.items()} if total else {}
-        influential = sorted((p for p in visible if p.text), key=lambda p: (-self.graph.influence[p.author], p.fund_id))
-        return PeerView(weights, [p.text for p in influential[:2]], len(seen_peers))
+        by_influence = sorted(visible, key=lambda p: (-self.graph.influence[p.author], p.fund_id))
+        snippets = [p.text[:SNIPPET_MAX_CHARS] for p in by_influence if p.text][:2]
+        for p in by_influence:      # commentaires de la communauté sur les posts visibles
+            snippets += [c[:SNIPPET_MAX_CHARS] for c in self.comments.get((p.author, p.fund_id, p.month_index), [])[:1]]
+        return PeerView(weights, snippets[:4], len(seen_peers))
 
     def export(self) -> List[dict]:
         return [dict(month=p.label, author=p.author, fund_id=p.fund_id, share=round(p.share, 3),

@@ -76,11 +76,12 @@ def population():
 @fundsim_bp.route('/run', methods=['POST'])
 def run():
     """Lance une simulation synchrone. Corps JSON : seed, mode (rule|llm), data (cache|synthetic),
-    start, end, anonymize, social (défaut true), max_calls. Les runs LLM longs deviendront asynchrones à l'étape 7."""
+    start, end, anonymize, social (native|oasis|off), oasis_reactions (rule|llm), oasis_llm_budget, max_calls. Les runs LLM longs deviendront asynchrones à l'étape 7."""
     from flask import request
     from .agents import build_population
     from .data import fred
     from .data.scenario import build_scenario, load_series_returns, synthetic_series_returns
+    from .oasis_compat import OasisUnavailable
     from .sim.runner import run_simulation
 
     body = request.get_json(silent=True) or {}
@@ -100,7 +101,15 @@ def run():
         return jsonify({'success': False, 'error': str(exc), 'host_to_allow': 'fred.stlouisfed.org'}), 503
     llm = FundSimLLM(max_calls=int(body['max_calls'])) if mode == 'llm' and 'max_calls' in body \
         else (FundSimLLM() if mode == 'llm' else None)
-    result = run_simulation(build_population(seed), scenario, llm,
-                            data_source='synthetic' if data == 'synthetic' else 'fred-cache',
-                            social=bool(body.get('social', True)))
+    social = body.get('social', 'native')
+    social = 'native' if social is True else 'off' if social is False else social
+    if social not in ('native', 'oasis', 'off') or body.get('oasis_reactions', 'rule') not in ('rule', 'llm'):
+        return jsonify({'success': False, 'error': "social ∈ {native, oasis, off}, oasis_reactions ∈ {rule, llm}"}), 400
+    try:
+        result = run_simulation(build_population(seed), scenario, llm,
+                                data_source='synthetic' if data == 'synthetic' else 'fred-cache', social=social,
+                                oasis_reactions=body.get('oasis_reactions', 'rule'),
+                                oasis_llm_budget=int(body.get('oasis_llm_budget', 150)))
+    except OasisUnavailable as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 503
     return jsonify({'success': True, 'data': result.to_dict()})
