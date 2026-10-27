@@ -1,5 +1,6 @@
 """Décision d'un LP : proposition (LLM ou règle de référence) puis validation déterministe."""
 
+import dataclasses
 import json
 import random
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from ..llm import BudgetExceeded, FundSimLLM, LLMJSONError
 
 RECORD_WINDOW = 36
 PERCEPTION_NOISE = 0.06   # écart-type du jugement propre de chaque LP sur la qualité d'un GP
+SLEEVE_CAP = 0.4          # un fonds ne dépasse pas 40 % de la poche stratégique visée par le LP
 HERDING_GAIN = 2.0     # un fonds plébiscité par tous les pairs voit son poids multiplié par 1 + 2 x herding
 
 
@@ -45,6 +47,12 @@ class Decision:
     unallocated: float
     adjustments: List[str] = field(default_factory=list)
     rationale: str = ""
+
+
+def fund_cap(agent: LPAgent, strategy: str) -> float:
+    """Part maximale du budget dans un seul fonds : le plus grand du plafond absolu de la politique
+    et de SLEEVE_CAP x la cible de la stratégie (45 % de buyout visés autorisent 18 % dans un fonds)."""
+    return max(agent.policy.max_single_fund, SLEEVE_CAP * agent.policy.strategy_targets.get(strategy, 0.0))
 
 
 def make_candidates(open_funds_: List[Fund], gps: Mapping[str, GPSpec], history: Mapping[str, List[float]],
@@ -112,10 +120,10 @@ def build_messages(agent: LPAgent, status: Status, candidates: List[Candidate], 
 def decide(agent: LPAgent, status: Status, candidates: List[Candidate], month: MonthData,
            recent_news: List[dict], llm: Optional[FundSimLLM], themes, model: Optional[str] = None,
            peer_summary: str = "", peer_weights: Optional[Mapping[str, float]] = None) -> Decision:
-    caps = {c.fund.fund_id: c.capacity / status.budget for c in candidates}
+    caps = {c.fund.fund_id: min(c.capacity / status.budget, fund_cap(agent, c.fund.strategy)) for c in candidates}
     source, rationale = 'rule', ''
     if llm is None:
-        proposal = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label)
+        proposal = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=str(month.index))
     else:
         try:
             reply = llm.complete_json(
@@ -126,12 +134,12 @@ def decide(agent: LPAgent, status: Status, candidates: List[Candidate], month: M
                 raise LLMJSONError("clé « weights » absente ou vide")
             proposal, source, rationale = weights, 'llm', str(reply.get('rationale', ''))[:300]
         except BudgetExceeded:
-            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label), 'fallback:budget'
+            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=str(month.index)), 'fallback:budget'
         except LLMJSONError as exc:
-            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label), 'fallback:json'
+            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=str(month.index)), 'fallback:json'
             rationale = str(exc)[:120]
-    result = validate_allocation(proposal, {c.fund.fund_id: c.fund for c in candidates},
-                                 agent.policy.theme_limits(themes), fund_caps=caps)
+    limits = dataclasses.replace(agent.policy.theme_limits(themes), max_single_fund=1.0)   # les plafonds par fonds sont dans `caps`
+    result = validate_allocation(proposal, {c.fund.fund_id: c.fund for c in candidates}, limits, fund_caps=caps)
     return Decision(agent.agent_id, month.label, source, status.budget,
                     {k: v for k, v in proposal.items() if isinstance(v, (int, float))},
                     result.weights, result.unallocated, result.adjustments, rationale)

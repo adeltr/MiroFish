@@ -45,7 +45,7 @@ def test_universe_and_open_window():
     funds, gps = build_universe(60)
     assert all(f.gp in gps for f in funds.values())
     assert {f.strategy for f in funds.values()} == set(STRATEGIES)
-    assert [f.fund_id for f in open_funds(funds, 0)] == ['lumen-1']
+    assert len(open_funds(funds, 0)) >= 8       # le marché est déjà ouvert au premier mois
     assert len(open_funds(funds, 20)) >= 6     # assez de choix pour diversifier
     assert open_funds(funds, 13) != []
     assert all(f.vintage_month <= 13 < f.vintage_month + 18 for f in open_funds(funds, 13))

@@ -8,7 +8,7 @@ from app.fundsim import fundsim_bp
 from app.fundsim.agents import allocation_status, build_population, open_funds
 from app.fundsim.data.scenario import build_scenario, synthetic_series_returns
 from app.fundsim.llm import FundSimLLM
-from app.fundsim.sim.decisions import build_messages, decide, make_candidates, rule_proposal
+from app.fundsim.sim.decisions import build_messages, decide, fund_cap, make_candidates, rule_proposal
 from app.fundsim.sim.runner import run_simulation
 
 
@@ -41,7 +41,8 @@ def test_unknown_funds_and_overweights_are_clipped_and_logged():
         {"weights": {ids[0]: 0.9, "GHOST-9": 0.1}, "rationale": "test"}))
     dec = decide(lp, st, cands, scenario().months[12], [], llm, ['tech'])
     assert dec.source == 'llm' and dec.rationale == 'test'
-    assert max(dec.weights.values()) <= lp.policy.max_single_fund + 1e-9
+    assert all(w <= fund_cap(lp, next(c.fund.strategy for c in cands if c.fund.fund_id == fid)) + 1e-9
+               for fid, w in dec.weights.items())
     assert any('GHOST-9' in a for a in dec.adjustments)
 
 
@@ -101,10 +102,11 @@ def test_fund_capacity_is_never_exceeded():
 
 def test_no_lp_breaks_its_single_fund_cap():
     r = run_simulation(build_population(7), scenario(), None, 'synthetic')
-    cap = {a.agent_id: a.policy.max_single_fund for a in build_population(7).lps}
+    pop = build_population(7)
+    lps = {a.agent_id: a for a in pop.lps}
     for m in r.months:
         for d in m.decisions:
-            assert all(w <= cap[d.lp_id] + 1e-9 for w in d.weights.values())
+            assert all(w <= fund_cap(lps[d.lp_id], pop.funds[fid].strategy) + 1e-9 for fid, w in d.weights.items())
             assert sum(d.weights.values()) + d.unallocated == pytest.approx(1.0)
 
 
@@ -141,8 +143,9 @@ def client():
 def test_run_endpoint_synthetic(client):
     res = client.post('/api/fundsim/run', json={'data': 'synthetic', 'mode': 'rule', 'seed': 7})
     body = res.get_json()
-    assert res.status_code == 200 and body['data']['data_source'] == 'synthetic'
-    assert len(body['data']['months']) == 60
+    meta = body['data']['allocations']['meta']
+    assert res.status_code == 200 and meta['data_source'] == 'synthetic' and meta['months'] == 60
+    assert 'detail' not in body['data']          # pas de bruit social par défaut
 
 
 def test_run_endpoint_without_real_data_explains(client, monkeypatch, tmp_path):

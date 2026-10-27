@@ -112,4 +112,44 @@ def run():
                                 oasis_llm_budget=int(body.get('oasis_llm_budget', 150)))
     except OasisUnavailable as exc:
         return jsonify({'success': False, 'error': str(exc)}), 503
-    return jsonify({'success': True, 'data': result.to_dict()})
+    from .analysis import allocation_report
+    data_out = {'allocations': allocation_report(result)}
+    if body.get('detail'):                 # décisions mensuelles, fil social, etc. : seulement à la demande
+        data_out['detail'] = result.to_dict()
+    return jsonify({'success': True, 'data': data_out})
+
+
+@fundsim_bp.route('/compare', methods=['POST'])
+def compare_scenarios():
+    """Compare des variantes sur la même population et les mêmes marchés, en termes d'ALLOCATIONS.
+    Corps : seed, data (cache|synthetic), start, end, variants [{name, social, news, anonymize, mode,
+    oasis_reactions}], reference {archétype: {strategy, theme, private_share}} (optionnel)."""
+    from flask import request
+    from .analysis import compare_variants, run_variants
+    from .data import fred
+    from .data.scenario import load_series_returns, synthetic_series_returns
+    from .oasis_compat import OasisUnavailable
+
+    body = request.get_json(silent=True) or {}
+    variants = body.get('variants') or []
+    names = [v.get('name') for v in variants]
+    if not (2 <= len(variants) <= 6) or not all(names) or len(set(names)) != len(names):
+        return jsonify({'success': False, 'error': "2 à 6 variantes, chacune avec un nom unique"}), 400
+    if any(v.get('social', 'native') not in ('native', 'oasis', 'off') or v.get('mode', 'rule') not in ('rule', 'llm')
+           for v in variants):
+        return jsonify({'success': False, 'error': "social ∈ {native, oasis, off}, mode ∈ {rule, llm}"}), 400
+    if any(v.get('mode') == 'llm' for v in variants) and not Config.LLM_API_KEY and not Config.FUNDSIM_DRY_RUN:
+        return jsonify({'success': False, 'error': 'LLM_API_KEY non configurée'}), 400
+    seed, data = int(body.get('seed', 7)), body.get('data', 'cache')
+    start, end = body.get('start', '2019-01'), body.get('end', '2023-12')
+    try:
+        series = (synthetic_series_returns(start, end, seed) if data == 'synthetic'
+                  else load_series_returns(allow_network=False))
+        results = run_variants(seed, series, start, end, variants,
+                               'synthetic' if data == 'synthetic' else 'fred-cache',
+                               llm_factory=lambda: FundSimLLM(max_calls=int(body.get('max_calls', 500))))
+    except fred.DataError as exc:
+        return jsonify({'success': False, 'error': str(exc), 'host_to_allow': 'fred.stlouisfed.org'}), 503
+    except OasisUnavailable as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 503
+    return jsonify({'success': True, 'data': compare_variants(results, variants, body.get('reference'))})

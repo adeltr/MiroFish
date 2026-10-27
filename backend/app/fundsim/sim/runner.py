@@ -23,6 +23,11 @@ class MonthRecord:
     new_commitments: Dict[str, float]          # par GP
     blocked: Dict[str, str]                    # LP -> raison (budget nul)
     decisions: List[Decision] = field(default_factory=list)
+    allocation_strategy: Dict[str, Dict[str, float]] = field(default_factory=dict)   # archétype -> stratégie -> part
+    allocation_theme: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    private_share: Dict[str, float] = field(default_factory=dict)                    # archétype -> privé / actif total
+    new_by_strategy: Dict[str, float] = field(default_factory=dict)                  # nouveaux engagements du mois
+    new_by_theme: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,9 +41,11 @@ class SimulationResult:
     commitments_by_strategy: Dict[str, float]
     commitments_by_theme: Dict[str, float]
     final_allocations: Dict[str, Dict[str, float]]    # archétype -> stratégie -> part
+    final_theme_allocations: Dict[str, Dict[str, float]]
     target_allocations: Dict[str, Dict[str, float]]
     decision_sources: Dict[str, int]
     llm_calls: int
+    target_private_share: Dict[str, float] = field(default_factory=dict)
     social_enabled: bool = False
     feed: List[dict] = field(default_factory=list)
     influence: Dict[str, float] = field(default_factory=dict)
@@ -139,19 +146,25 @@ def _simulate(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM], da
                     feed.publish(Post(i, month.label, lp.agent_id, fid, w, amount, dec.rationale
                                       or f"Engagement de {amount:,.0f} M$ dans {fid} ({f.strategy}, {f.theme})."))
                 rec.new_commitments[f.gp] = rec.new_commitments.get(f.gp, 0.0) + amount
+                rec.new_by_strategy[f.strategy] = rec.new_by_strategy.get(f.strategy, 0.0) + amount
+                rec.new_by_theme[f.theme] = rec.new_by_theme.get(f.theme, 0.0) + amount
                 by_gp[f.gp] = by_gp.get(f.gp, 0.0) + amount
                 by_strategy[f.strategy] = by_strategy.get(f.strategy, 0.0) + amount
                 by_theme[f.theme] = by_theme.get(f.theme, 0.0) + amount
             rec.decisions.append(dec)
         if hasattr(feed, 'end_of_month'):
             feed.end_of_month(i)
+        rec.allocation_strategy = _allocations(pop, 'strategy')
+        rec.allocation_theme = _allocations(pop, 'theme')
+        rec.private_share = _private_share(pop)
         records.append(rec)
 
     return SimulationResult(
         seed=seed, mode='llm' if llm is not None else 'rule', data_source=data_source,
         anonymized=scenario.anonymized, months=records, commitments_by_gp=by_gp,
         commitments_by_strategy=by_strategy, commitments_by_theme=by_theme,
-        final_allocations=_final_allocations(pop), target_allocations=_targets(pop),
+        final_allocations=_allocations(pop, 'strategy'), final_theme_allocations=_allocations(pop, 'theme'),
+        target_allocations=_targets(pop), target_private_share={lp.archetype: lp.policy.target_private for lp in pop.lps},
         decision_sources=sources, llm_calls=llm.calls if llm is not None else 0,
         social_enabled=feed is not None, feed=feed.export() if feed else [],
         influence={k: round(v, 3) for k, v in feed.graph.influence.items()} if feed else {},
@@ -160,18 +173,29 @@ def _simulate(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM], da
         oasis=feed.oasis_export() if hasattr(feed, 'oasis_export') else {})
 
 
-def _final_allocations(pop: Population) -> Dict[str, Dict[str, float]]:
+def _allocations(pop: Population, key: str) -> Dict[str, Dict[str, float]]:
+    """Exposition privée (NAV + non-appelé) par archétype, répartie selon `strategy` ou `theme`,
+    pondérée par les montants : c'est l'allocation du groupe d'investisseurs dans son ensemble."""
     totals: Dict[str, Dict[str, float]] = {}
     for lp in pop.lps:
         bucket = totals.setdefault(lp.archetype, {})
         for fid, pos in lp.account.positions.items():
-            s = pop.funds[fid].strategy
-            bucket[s] = bucket.get(s, 0.0) + pos.nav + pos.unfunded
+            k = getattr(pop.funds[fid], key)
+            bucket[k] = bucket.get(k, 0.0) + pos.nav + pos.unfunded
     out = {}
     for arch, b in totals.items():
         tot = sum(b.values())
-        out[arch] = {s: round(v / tot, 4) for s, v in sorted(b.items())} if tot else {}
+        out[arch] = {k: round(v / tot, 4) for k, v in sorted(b.items())} if tot else {}
     return out
+
+
+def _private_share(pop: Population) -> Dict[str, float]:
+    num: Dict[str, float] = {}
+    den: Dict[str, float] = {}
+    for lp in pop.lps:
+        num[lp.archetype] = num.get(lp.archetype, 0.0) + lp.account.private_nav + lp.account.unfunded
+        den[lp.archetype] = den.get(lp.archetype, 0.0) + lp.account.total_assets
+    return {a: round(num[a] / den[a], 4) if den[a] else 0.0 for a in num}
 
 
 def _targets(pop: Population) -> Dict[str, Dict[str, float]]:

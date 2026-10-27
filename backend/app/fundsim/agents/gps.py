@@ -47,6 +47,7 @@ GPS: Tuple[GPSpec, ...] = (
 
 NOISE_MONTHLY = {'venture': 0.010, 'growth': 0.007, 'buyout': 0.005, 'secondaries': 0.004,
                  'private_credit': 0.003, 'infrastructure': 0.003, 'real_estate': 0.005}
+MARKET_ALREADY_OPEN_MONTHS = 17   # le marché existe avant le mois 0 : des fonds sont déjà en cours de levée
 FUND_CYCLE_MONTHS = 36      # un nouveau fonds par GP tous les trois ans
 OPEN_WINDOW_MONTHS = 18     # durée pendant laquelle un fonds accepte des engagements
 
@@ -55,7 +56,7 @@ def build_universe(horizon: int = 60) -> Tuple[Dict[str, Fund], Dict[str, GPSpec
     """Tous les fonds qui ouvrent pendant le scénario (+ un fonds « legacy » par stratégie)."""
     funds: Dict[str, Fund] = {}
     for gp in GPS:
-        n, month = 1, gp.first_close
+        n, month = 1, gp.first_close - MARKET_ALREADY_OPEN_MONTHS
         while month < horizon:
             fid = f"{gp.gp_id}-{n}"
             funds[fid] = Fund(fid, gp.gp_id, gp.strategy, gp.theme, month, gp.size,
