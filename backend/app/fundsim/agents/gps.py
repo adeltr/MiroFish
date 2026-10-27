@@ -34,12 +34,21 @@ GPS: Tuple[GPSpec, ...] = (
     GPSpec('greenline', 'Greenline Energy Transition', 'infrastructure', 'energy_transition', 0.015, 0.015, 4_500, 9),
     GPSpec('bedrock', 'Bedrock Infrastructure', 'infrastructure', 'real_assets', 0.010, 0.015, 7_000, 12),
     GPSpec('landmark', 'Landmark Real Assets', 'real_estate', 'real_assets', -0.005, 0.015, 3_000, 4),
+    GPSpec('beacon', 'Beacon Consumer Partners', 'buyout', 'consumer', 0.005, 0.020, 3_500, 19),
+    GPSpec('ironwood', 'Ironwood Capital', 'buyout', 'tech', 0.020, 0.020, 5_000, 23),
+    GPSpec('crestview', 'Crestview Health Growth', 'growth', 'healthcare', 0.015, 0.020, 2_500, 13),
+    GPSpec('orbit', 'Orbit Ventures', 'venture', 'tech', 0.010, 0.025, 1_800, 24),
+    GPSpec('anchor', 'Anchor Direct Lending', 'private_credit', 'financials', 0.005, 0.010, 4_500, 10),
+    GPSpec('sterling', 'Sterling Mezzanine', 'private_credit', 'industrials', 0.015, 0.012, 3_000, 28),
+    GPSpec('pinnacle', 'Pinnacle Digital Infrastructure', 'infrastructure', 'tech', 0.020, 0.015, 5_000, 21),
+    GPSpec('cascade', 'Cascade Multifamily', 'real_estate', 'real_assets', 0.005, 0.015, 2_500, 16),
+    GPSpec('vanguardsec', 'Fairway Secondaries', 'secondaries', 'diversified', 0.020, 0.015, 3_500, 15),
 )
 
 NOISE_MONTHLY = {'venture': 0.010, 'growth': 0.007, 'buyout': 0.005, 'secondaries': 0.004,
                  'private_credit': 0.003, 'infrastructure': 0.003, 'real_estate': 0.005}
 FUND_CYCLE_MONTHS = 36      # un nouveau fonds par GP tous les trois ans
-OPEN_WINDOW_MONTHS = 12     # durée pendant laquelle un fonds accepte des engagements
+OPEN_WINDOW_MONTHS = 18     # durée pendant laquelle un fonds accepte des engagements
 
 
 def build_universe(horizon: int = 60) -> Tuple[Dict[str, Fund], Dict[str, GPSpec]]:
@@ -67,3 +76,20 @@ def fund_return(fund: Fund, gp: GPSpec, strategy_return: float, month: int, seed
     rng = random.Random(f"{seed}|{fund.fund_id}|{month}")
     noise = rng.gauss(0.0, NOISE_MONTHLY[fund.strategy])
     return strategy_return + (gp.alpha_annual - gp.fee_annual) / 12.0 + noise
+
+
+PRIOR_MONTHS = 36
+PRIOR_STRATEGY_RETURN = 0.004   # rendement mensuel moyen supposé de la stratégie avant le scénario
+
+
+def prior_history(gps: Mapping[str, GPSpec], seed: int) -> Dict[str, List[float]]:
+    """Historique antérieur du fonds « n°0 » de chaque GP : signal bruité de sa compétence, observable
+    par les LP dès le premier mois. Fictif, comme les GP eux-mêmes ; sans lui, rien ne distingue un
+    premier fonds d'un autre et la sélection par la performance ne démarrerait qu'après trois ans."""
+    out: Dict[str, List[float]] = {}
+    for gp in gps.values():
+        rng = random.Random(f"{seed}|prior|{gp.gp_id}")
+        sigma = NOISE_MONTHLY[gp.strategy]
+        out[f"{gp.gp_id}-0"] = [PRIOR_STRATEGY_RETURN + (gp.alpha_annual - gp.fee_annual) / 12.0
+                                + rng.gauss(0.0, sigma) for _ in range(PRIOR_MONTHS)]
+    return out

@@ -46,8 +46,9 @@ def test_universe_and_open_window():
     assert all(f.gp in gps for f in funds.values())
     assert {f.strategy for f in funds.values()} == set(STRATEGIES)
     assert [f.fund_id for f in open_funds(funds, 0)] == ['lumen-1']
+    assert len(open_funds(funds, 20)) >= 6     # assez de choix pour diversifier
     assert open_funds(funds, 13) != []
-    assert all(f.vintage_month <= 13 < f.vintage_month + 12 for f in open_funds(funds, 13))
+    assert all(f.vintage_month <= 13 < f.vintage_month + 18 for f in open_funds(funds, 13))
 
 
 def test_fund_returns_deterministic_and_skill_matters():

@@ -32,7 +32,7 @@ ARCHETYPES: Dict[str, dict] = {
             theme_tilts={'tech': 1.3, 'healthcare': 1.2},
             persona="Family office : décisions rapides, portefeuille concentré, convictions thématiques fortes, accès direct aux GP.")),
     'insurer': dict(label="Assureur", aum=90_000, regions=['Connecticut', 'Illinois', 'Ontario'],
-        policy=LPPolicy(0.08, (0.05, 0.12), _t(.05, .00, .00, .05, .50, .25, .15), 0.02, 0.25, 0.10, herding=0.3,
+        policy=LPPolicy(0.08, (0.05, 0.12), _t(.05, .00, .00, .05, .50, .25, .15), 0.02, 0.25, 0.20, herding=0.3,
             theme_tilts={'real_assets': 1.2},
             persona="Assureur : passif long à adosser, capital réglementaire contraignant, cherche du rendement de crédit et des flux contractuels.")),
     'sovereign_wealth': dict(label="Fonds souverain", aum=200_000, regions=['Moyen-Orient', 'Asie', 'Alaska'],
@@ -43,7 +43,7 @@ ARCHETYPES: Dict[str, dict] = {
         policy=LPPolicy(0.90, (0.80, 0.97), _t(.25, .10, .15, .25, .10, .05, .10), 0.25, 0.03, 0.08, herding=0.6,
             persona="Fonds de fonds : déploie rapidement le capital de ses clients, forte diversification, achète des parts sur le marché secondaire quand les décotes sont attractives.")),
     'corporate_pension': dict(label="Retraite d'entreprise", aum=20_000, regions=['Midwest', 'Texas'],
-        policy=LPPolicy(0.07, (0.03, 0.12), _t(.30, .00, .00, .10, .40, .10, .10), 0.01, 0.30, 0.10, herding=0.4,
+        policy=LPPolicy(0.07, (0.03, 0.12), _t(.30, .00, .00, .10, .40, .10, .10), 0.01, 0.30, 0.20, herding=0.4,
             persona="Régime à prestations définies d'entreprise : réduction du risque en cours, besoin de liquidité, privé limité au crédit et aux rendements stables.")),
 }
 

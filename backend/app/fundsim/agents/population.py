@@ -1,7 +1,7 @@
 """Construit une population reproductible : LP (avec portefeuille initial), GP et fonds."""
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional
 
 from ..engine import Fund, LPAccount, Position
@@ -10,6 +10,7 @@ from .gps import GPSpec, build_universe
 from .policy import LPPolicy
 
 LEGACY_AGE_MONTHS = 48
+SUPPLY_RATIO = 1.5         # capacité totale des fonds = 1,5 x la demande des LP, par stratégie : de la concurrence
 INITIAL_FILL = 0.8         # le LP démarre à 80 % de sa cible privée : il a de la marge pour s'engager
 
 
@@ -73,4 +74,25 @@ def build_population(seed: int = 7, counts: Optional[Dict[str, int]] = None,
                 agent_id=account.lp_id, index=len(lps), name=f"{spec['label']} {suffix}",
                 archetype=arch, region=spec['regions'][k % len(spec['regions'])],
                 policy=policy, account=account))
+    funds = _calibrate_supply(funds, lps, horizon)
     return Population(seed, lps, gps, funds)
+
+
+def _calibrate_supply(funds: Dict[str, Fund], lps: List[LPAgent], horizon: int) -> Dict[str, Fund]:
+    """Ajuste la taille des fonds pour que l'offre soit SUPPLY_RATIO fois la demande des LP, stratégie
+    par stratégie. Sans cela, tout fonds se remplit quoi qu'il arrive et la sélection entre GP disparaît."""
+    years = horizon / 12.0
+    demand: Dict[str, float] = {}
+    for lp in lps:
+        # rythme annuel : le plus grand du rythme fixé et du renouvellement d'un quart de la cible
+        annual = max(lp.policy.pacing_annual, 0.25 * lp.policy.target_private)
+        base = annual * lp.account.total_assets * years
+        for s, w in lp.policy.strategy_targets.items():
+            demand[s] = demand.get(s, 0.0) + base * w
+    supply: Dict[str, float] = {}
+    for f in funds.values():
+        if f.gp != 'legacy':
+            supply[f.strategy] = supply.get(f.strategy, 0.0) + f.target_size
+    scale = {s: SUPPLY_RATIO * demand.get(s, 0.0) / v for s, v in supply.items() if v > 0}
+    return {fid: f if f.gp == 'legacy' else replace(f, target_size=f.target_size * scale.get(f.strategy, 1.0))
+            for fid, f in funds.items()}

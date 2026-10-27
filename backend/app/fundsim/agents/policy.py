@@ -6,6 +6,9 @@ from typing import Mapping, Tuple
 from ..engine import LPAccount, Limits
 
 
+GAP_CLOSE = 0.25   # part de l'écart à la cible comblée à chaque revue
+
+
 @dataclass(frozen=True)
 class LPPolicy:
     target_private: float                  # part cible du privé (NAV + non-appelé) dans l'actif total
@@ -57,8 +60,10 @@ def allocation_status(account: LPAccount, policy: LPPolicy) -> Status:
     if state == 'over':
         return Status(exposure, liquid, state, 0.0, "au-dessus du plafond de la politique (effet dénominateur)")
     pace = policy.pacing_annual * total * policy.review_every / 12.0
-    room = hi * total - (account.private_nav + account.unfunded)
-    return Status(exposure, liquid, state, max(min(pace, room), 0.0), "ok")
+    held = account.private_nav + account.unfunded
+    gap = max(policy.target_private * total - held, 0.0)   # sur-engagement : on comble une partie de l'écart
+    room = hi * total - held
+    return Status(exposure, liquid, state, max(min(pace + GAP_CLOSE * gap, room), 0.0), "ok")
 
 
 def prompt_block(name: str, archetype: str, policy: LPPolicy, status: Status) -> str:

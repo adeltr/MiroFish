@@ -71,3 +71,35 @@ def population():
     from .agents import build_population
     seed = request.args.get('seed', default=7, type=int)
     return jsonify({'success': True, 'data': build_population(seed).summary()})
+
+
+@fundsim_bp.route('/run', methods=['POST'])
+def run():
+    """Lance une simulation synchrone. Corps JSON : seed, mode (rule|llm), data (cache|synthetic),
+    start, end, anonymize, max_calls. Les runs LLM longs deviendront asynchrones à l'étape 7."""
+    from flask import request
+    from .agents import build_population
+    from .data import fred
+    from .data.scenario import build_scenario, load_series_returns, synthetic_series_returns
+    from .sim.runner import run_simulation
+
+    body = request.get_json(silent=True) or {}
+    seed = int(body.get('seed', 7))
+    mode = body.get('mode', 'rule')
+    data = body.get('data', 'cache')
+    start, end = body.get('start', '2019-01'), body.get('end', '2023-12')
+    if mode not in ('rule', 'llm') or data not in ('cache', 'synthetic'):
+        return jsonify({'success': False, 'error': "mode ∈ {rule, llm}, data ∈ {cache, synthetic}"}), 400
+    if mode == 'llm' and not Config.LLM_API_KEY and not Config.FUNDSIM_DRY_RUN:
+        return jsonify({'success': False, 'error': 'LLM_API_KEY non configurée'}), 400
+    try:
+        series = (synthetic_series_returns(start, end, seed) if data == 'synthetic'
+                  else load_series_returns(allow_network=False))
+        scenario = build_scenario(series, start, end, bool(body.get('anonymize', False)))
+    except fred.DataError as exc:
+        return jsonify({'success': False, 'error': str(exc), 'host_to_allow': 'fred.stlouisfed.org'}), 503
+    llm = FundSimLLM(max_calls=int(body['max_calls'])) if mode == 'llm' and 'max_calls' in body \
+        else (FundSimLLM() if mode == 'llm' else None)
+    result = run_simulation(build_population(seed), scenario, llm,
+                            data_source='synthetic' if data == 'synthetic' else 'fred-cache')
+    return jsonify({'success': True, 'data': result.to_dict()})
