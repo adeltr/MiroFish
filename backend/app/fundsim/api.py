@@ -62,3 +62,12 @@ def news_calendar():
             if item not in [i['news'] for i in items]:
                 items.append({'month': None if anon else n.month, 'news': item})
     return jsonify({'success': True, 'data': items})
+
+
+@fundsim_bp.route('/population', methods=['GET'])
+def population():
+    """Résumé de la population d'agents (LP et GP) pour une graine donnée."""
+    from flask import request
+    from .agents import build_population
+    seed = request.args.get('seed', default=7, type=int)
+    return jsonify({'success': True, 'data': build_population(seed).summary()})
