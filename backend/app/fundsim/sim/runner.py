@@ -8,7 +8,9 @@ from ..agents.gps import prior_history
 from ..data.scenario import Scenario
 from ..llm import FundSimLLM
 from .decisions import Decision, decide, make_candidates
+from .social import Feed, Post, build_graph
 
+MIN_COMMITMENT = 1.0     # M$ : en dessous, un engagement est un résidu de capacité, pas une décision
 NEWS_LOOKBACK = 2        # mois d'actualité montrés au LP en plus du mois courant
 
 
@@ -37,13 +39,18 @@ class SimulationResult:
     target_allocations: Dict[str, Dict[str, float]]
     decision_sources: Dict[str, int]
     llm_calls: int
+    social_enabled: bool = False
+    feed: List[dict] = field(default_factory=list)
+    influence: Dict[str, float] = field(default_factory=dict)
+    follows: Dict[str, List[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM] = None,
-                   data_source: str = 'unknown', model: Optional[str] = None, seed: Optional[int] = None) -> SimulationResult:
+                   data_source: str = 'unknown', model: Optional[str] = None, seed: Optional[int] = None,
+                   social: bool = True) -> SimulationResult:
     """`llm=None` : tous les LP suivent la règle de référence (aucun appel réseau)."""
     seed = pop.seed if seed is None else seed
     funds, gps = pop.funds, pop.gps
@@ -56,6 +63,7 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
     themes = sorted({f.theme for f in funds.values()})
     records: List[MonthRecord] = []
     n = len(pop.lps)
+    feed = Feed(build_graph(pop, seed)) if social else None
 
     for month in scenario.months:
         i = month.index
@@ -88,15 +96,21 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
             candidates = make_candidates(open_funds(funds, i), gps, history, raised)
             if not candidates:
                 continue
-            dec = decide(lp, status, candidates, month, recent, llm, themes, model)
+            view = feed.peer_view(lp.agent_id, i) if feed else None
+            dec = decide(lp, status, candidates, month, recent, llm, themes, model,
+                         peer_summary=view.summary(funds, lp.policy.herding) if view else "",
+                         peer_weights=view.weights if view else None)
             sources[dec.source] = sources.get(dec.source, 0) + 1
             for fid, w in dec.weights.items():
                 amount = min(w * status.budget, funds[fid].target_size - raised.get(fid, 0.0))
-                if amount <= 0:
+                if amount < MIN_COMMITMENT:
                     continue
                 lp.account.commit(fid, amount)
                 raised[fid] = raised.get(fid, 0.0) + amount
                 f = funds[fid]
+                if feed:
+                    feed.publish(Post(i, month.label, lp.agent_id, fid, w, amount, dec.rationale
+                                      or f"Engagement de {amount:,.0f} M$ dans {fid} ({f.strategy}, {f.theme})."))
                 rec.new_commitments[f.gp] = rec.new_commitments.get(f.gp, 0.0) + amount
                 by_gp[f.gp] = by_gp.get(f.gp, 0.0) + amount
                 by_strategy[f.strategy] = by_strategy.get(f.strategy, 0.0) + amount
@@ -109,7 +123,10 @@ def run_simulation(pop: Population, scenario: Scenario, llm: Optional[FundSimLLM
         anonymized=scenario.anonymized, months=records, commitments_by_gp=by_gp,
         commitments_by_strategy=by_strategy, commitments_by_theme=by_theme,
         final_allocations=_final_allocations(pop), target_allocations=_targets(pop),
-        decision_sources=sources, llm_calls=llm.calls if llm is not None else 0)
+        decision_sources=sources, llm_calls=llm.calls if llm is not None else 0,
+        social_enabled=feed is not None, feed=feed.export() if feed else [],
+        influence={k: round(v, 3) for k, v in feed.graph.influence.items()} if feed else {},
+        follows=feed.graph.follows if feed else {})
 
 
 def _final_allocations(pop: Population) -> Dict[str, Dict[str, float]]:

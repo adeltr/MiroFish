@@ -1,6 +1,7 @@
 """Décision d'un LP : proposition (LLM ou règle de référence) puis validation déterministe."""
 
 import json
+import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
@@ -11,6 +12,8 @@ from ..engine import Fund, fundraising_shares, trailing_score, validate_allocati
 from ..llm import BudgetExceeded, FundSimLLM, LLMJSONError
 
 RECORD_WINDOW = 36
+PERCEPTION_NOISE = 0.06   # écart-type du jugement propre de chaque LP sur la qualité d'un GP
+HERDING_GAIN = 2.0     # un fonds plébiscité par tous les pairs voit son poids multiplié par 1 + 2 x herding
 
 
 @dataclass
@@ -58,21 +61,35 @@ def make_candidates(open_funds_: List[Fund], gps: Mapping[str, GPSpec], history:
     return out
 
 
-def rule_proposal(agent: LPAgent, candidates: List[Candidate], temperature: float = 0.15) -> Dict[str, float]:
+def _perceived(agent: LPAgent, c: Candidate, noise_key: str) -> float:
+    base = c.track_record or 0.0
+    if not noise_key:
+        return base
+    return base + random.Random(f"{agent.agent_id}|{c.fund.fund_id}|{noise_key}").gauss(0.0, PERCEPTION_NOISE)
+
+
+def rule_proposal(agent: LPAgent, candidates: List[Candidate], temperature: float = 0.15,
+                  peer_weights: Optional[Mapping[str, float]] = None, noise_key: str = "") -> Dict[str, float]:
     """Référence « darwinienne » : cible stratégique x préférences thématiques, répartie dans chaque
-    stratégie selon la performance passée du GP (softmax)."""
+    stratégie selon la performance passée du GP (softmax). Avec `peer_weights`, imitation des pairs
+    proportionnelle au paramètre `herding` du LP. `noise_key` non vide : chaque LP perçoit la
+    performance des GP avec son propre bruit reproductible (jugement individuel)."""
     policy = agent.policy
     by_strategy: Dict[str, List[Candidate]] = {}
     for c in candidates:
         by_strategy.setdefault(c.fund.strategy, []).append(c)
     raw: Dict[str, float] = {}
+    top_peer = max(peer_weights.values()) if peer_weights else 0.0
     for strat, items in by_strategy.items():
         target = policy.strategy_targets.get(strat, 0.0)
         if target <= 0:
             continue
-        shares = fundraising_shares({c.fund.fund_id: c.track_record or 0.0 for c in items}, temperature)
+        shares = fundraising_shares({c.fund.fund_id: _perceived(agent, c, noise_key) for c in items}, temperature)
         for c in items:
             raw[c.fund.fund_id] = target * shares[c.fund.fund_id] * policy.theme_tilts.get(c.fund.theme, 1.0)
+            if top_peer > 0:
+                crowd = peer_weights.get(c.fund.fund_id, 0.0) / top_peer
+                raw[c.fund.fund_id] *= 1.0 + HERDING_GAIN * policy.herding * crowd
     return raw
 
 
@@ -94,11 +111,11 @@ def build_messages(agent: LPAgent, status: Status, candidates: List[Candidate], 
 
 def decide(agent: LPAgent, status: Status, candidates: List[Candidate], month: MonthData,
            recent_news: List[dict], llm: Optional[FundSimLLM], themes, model: Optional[str] = None,
-           peer_summary: str = "") -> Decision:
+           peer_summary: str = "", peer_weights: Optional[Mapping[str, float]] = None) -> Decision:
     caps = {c.fund.fund_id: c.capacity / status.budget for c in candidates}
     source, rationale = 'rule', ''
     if llm is None:
-        proposal = rule_proposal(agent, candidates)
+        proposal = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label)
     else:
         try:
             reply = llm.complete_json(
@@ -109,9 +126,9 @@ def decide(agent: LPAgent, status: Status, candidates: List[Candidate], month: M
                 raise LLMJSONError("clé « weights » absente ou vide")
             proposal, source, rationale = weights, 'llm', str(reply.get('rationale', ''))[:300]
         except BudgetExceeded:
-            proposal, source = rule_proposal(agent, candidates), 'fallback:budget'
+            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label), 'fallback:budget'
         except LLMJSONError as exc:
-            proposal, source = rule_proposal(agent, candidates), 'fallback:json'
+            proposal, source = rule_proposal(agent, candidates, peer_weights=peer_weights, noise_key=month.label), 'fallback:json'
             rationale = str(exc)[:120]
     result = validate_allocation(proposal, {c.fund.fund_id: c.fund for c in candidates},
                                  agent.policy.theme_limits(themes), fund_caps=caps)

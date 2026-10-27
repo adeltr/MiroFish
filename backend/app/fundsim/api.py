@@ -76,7 +76,7 @@ def population():
 @fundsim_bp.route('/run', methods=['POST'])
 def run():
     """Lance une simulation synchrone. Corps JSON : seed, mode (rule|llm), data (cache|synthetic),
-    start, end, anonymize, max_calls. Les runs LLM longs deviendront asynchrones à l'étape 7."""
+    start, end, anonymize, social (défaut true), max_calls. Les runs LLM longs deviendront asynchrones à l'étape 7."""
     from flask import request
     from .agents import build_population
     from .data import fred
@@ -101,5 +101,6 @@ def run():
     llm = FundSimLLM(max_calls=int(body['max_calls'])) if mode == 'llm' and 'max_calls' in body \
         else (FundSimLLM() if mode == 'llm' else None)
     result = run_simulation(build_population(seed), scenario, llm,
-                            data_source='synthetic' if data == 'synthetic' else 'fred-cache')
+                            data_source='synthetic' if data == 'synthetic' else 'fred-cache',
+                            social=bool(body.get('social', True)))
     return jsonify({'success': True, 'data': result.to_dict()})
