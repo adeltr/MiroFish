@@ -35,3 +35,30 @@ def llm_ping():
     except Exception as exc:  # erreur réseau, clé invalide, JSON invalide…
         return jsonify({'success': False, 'error': f'{type(exc).__name__}: {exc}'}), 502
     return jsonify({'success': True, 'data': {'reply': reply, 'calls': llm.calls}})
+
+
+@fundsim_bp.route('/data/status', methods=['GET'])
+def data_status():
+    """Séries FRED déjà en cache et séries encore à télécharger."""
+    from .data import fred, proxies
+    cached = set(fred.cached_series())
+    needed = sorted(proxies.SERIES.values())
+    return jsonify({'success': True, 'data': {
+        'cached': sorted(cached & set(needed)),
+        'missing': [s for s in needed if s not in cached],
+        'host_to_allow': 'fred.stlouisfed.org',
+    }})
+
+
+@fundsim_bp.route('/news', methods=['GET'])
+def news_calendar():
+    """Calendrier de news. ?anonymize=true masque noms propres et dates."""
+    from flask import request
+    from .data import news
+    anon = request.args.get('anonymize', 'false').lower() == 'true'
+    items = []
+    for n in news.NEWS:
+        for item in news.news_for(n.month, anon):
+            if item not in [i['news'] for i in items]:
+                items.append({'month': None if anon else n.month, 'news': item})
+    return jsonify({'success': True, 'data': items})
