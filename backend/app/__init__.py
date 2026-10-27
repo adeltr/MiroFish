@@ -67,6 +67,8 @@ def create_app(config_class=Config):
     app.register_blueprint(graph_bp, url_prefix='/api/graph')
     app.register_blueprint(simulation_bp, url_prefix='/api/simulation')
     app.register_blueprint(report_bp, url_prefix='/api/report')
+    from .fundsim import fundsim_bp
+    app.register_blueprint(fundsim_bp, url_prefix='/api/fundsim')
     
     # 健康检查
     @app.route('/health')

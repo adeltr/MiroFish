@@ -32,8 +32,20 @@ class Config:
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
     
-    # Zep配置
+    # Zep配置（仅旧版图谱流程需要；fundsim 模块不依赖 Zep）
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
+
+    # --- fundsim: simulation d'allocation LP -> fonds privés ---
+    # Modèle économique pour la boucle mensuelle, modèle fort pour l'analyse finale.
+    FUNDSIM_MODEL_FAST = os.environ.get('FUNDSIM_MODEL_FAST') or os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+    FUNDSIM_MODEL_STRONG = os.environ.get('FUNDSIM_MODEL_STRONG') or os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+    # Garde-fou de coût : nombre maximal d'appels LLM par run.
+    FUNDSIM_MAX_CALLS_PER_RUN = int(os.environ.get('FUNDSIM_MAX_CALLS_PER_RUN', '500'))
+    # Dry-run : aucun appel réseau, réponses factices (tests et démos hors ligne).
+    FUNDSIM_DRY_RUN = os.environ.get('FUNDSIM_DRY_RUN', 'false').lower() == 'true'
+    FUNDSIM_DATA_DIR = os.environ.get(
+        'FUNDSIM_DATA_DIR', os.path.join(os.path.dirname(__file__), '../uploads/fundsim')
+    )
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
@@ -67,9 +79,9 @@ class Config:
     def validate(cls) -> list[str]:
         """验证必要配置"""
         errors: list[str] = []
-        if not cls.LLM_API_KEY:
+        if not cls.LLM_API_KEY and not cls.FUNDSIM_DRY_RUN:
             errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY 未配置")
+        # ZEP_API_KEY n'est plus requis au démarrage : les endpoints du flux Zep
+        # d'origine le vérifient eux-mêmes, et fundsim n'utilise pas Zep.
         return errors
 
